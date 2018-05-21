@@ -113,7 +113,30 @@ class SetFrameRange(Application):
                                  "%s. This entity type does not have a "
                                  "field %s.%s!" % (sg_entity_type, sg_entity_type, sg_out_field))
 
-        return ( data[sg_in_field], data[sg_out_field] )
+        # if we're in Lighting or FX get the frame range from the latest published animation
+        # TODO: will need to extend to other steps
+        if data[sg_in_field] is None or data[sg_out_field] is None:
+            sg_filters = [['id', 'is', self.context.task['id']]]
+            sg_fields = ['step.Step.code']
+            step_data = self.shotgun.find_one('Task', filters=sg_filters, fields=sg_fields)
+            if not step_data.get('step.Step.code') == "Light" and not step_data.get('step.Step.code') == "FX":
+                return ( data[sg_in_field], data[sg_out_field] )
+            else:
+                start_frame = None
+                end_frame = None
+                sg_filters = [['entity', 'is', self.context.entity],
+                              ['task.Task.step.Step.code', 'is', 'Animation'],
+                              ['published_file_type', 'is', {'type': 'PublishedFileType', 'id': 4, 'name': 'Rendered Image'}]]
+                sg_fields = ['version_number', 'version.Version.sg_first_frame', 'version.Version.sg_last_frame', 'version.Version.frame_range']
+                version_data_list = self.shotgun.find('PublishedFile', filters=sg_filters, fields=sg_fields)
+                if version_data_list:
+                    latest_count = -1
+                    for version_data in version_data_list:
+                        if version_data.get('version_number') > latest_count:
+                            latest_count = version_data.get('version_number')
+                            start_frame = version_data.get('version.Version.sg_first_frame')
+                            end_frame = version_data.get('version.Version.sg_last_frame')
+                return ( start_frame, end_frame )
 
 
     def get_current_frame_range(self, engine):
