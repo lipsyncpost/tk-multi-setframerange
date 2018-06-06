@@ -1,11 +1,11 @@
 # Copyright (c) 2013 Shotgun Software Inc.
-# 
+#
 # CONFIDENTIAL AND PROPRIETARY
-# 
-# This work is provided "AS IS" and subject to the Shotgun Pipeline Toolkit 
+#
+# This work is provided "AS IS" and subject to the Shotgun Pipeline Toolkit
 # Source Code License included in this distribution package. See LICENSE.
-# By accessing, using, copying or modifying this work you indicate your 
-# agreement to the Shotgun Pipeline Toolkit Source Code License. All rights 
+# By accessing, using, copying or modifying this work you indicate your
+# agreement to the Shotgun Pipeline Toolkit Source Code License. All rights
 # not expressly granted therein are reserved by Shotgun Software Inc.
 
 """
@@ -49,12 +49,10 @@ class SetFrameRange(Application):
         """
         self.log_debug("Destroying sg_set_frame_range")
 
-
     def run_app(self):
         """
         Callback from when the menu is clicked.
         """
-
         (new_in, new_out) = self.get_frame_range_from_shotgun()
         (current_in, current_out) = self.get_current_frame_range(self.engine.name)
 
@@ -63,28 +61,37 @@ class SetFrameRange(Application):
             message += "in and out frame data for this Shot."
             QtGui.QMessageBox.information(None, "No data in Shotgun!", message)
             return
-            
+
         # now update the frame range.
         # because the frame range is often set in multiple places (e.g render range,
         # current range, anim range etc), we go ahead an update every time, even if
         # the values in Shotgun are the same as the values reported via get_current_frame_range()
         self.set_frame_range(self.engine.name, new_in, new_out)
-        
+
         message =  "Your scene has been updated with the \n"
         message += "latest frame ranges from shotgun.\n\n"
         message += "Previous start frame: %s\n" % current_in
         message += "New start frame: %s\n\n" % new_in
         message += "Previous end frame: %s\n" % current_out
         message += "New end frame: %s\n\n" % new_out
-        
+
         QtGui.QMessageBox.information(None, "Frame range updated!", message)
-
-
-
 
     ###############################################################################################
     # implementation
-
+    def get_versions_list_from_shotgun(self):
+        # get frame range of plates first and then animation if there are no plates
+        for step in ["plates", "animation"]:
+            print "Getting frame range from published {}...".format(step)
+            sg_filters = [['entity', 'is', self.context.entity],
+                          ['task.Task.step.Step.code', 'is', step],
+                          ['published_file_type', 'is', {'type': 'PublishedFileType', 'id': 4, 'name': 'Rendered Image'}]]
+            sg_fields = ['version_number', 'version.Version.sg_first_frame', 'version.Version.sg_last_frame', 'version.Version.frame_range', 'name', 'task.Task.step.Step.code']
+            version_data_list = self.shotgun.find('PublishedFile', filters=sg_filters, fields=sg_fields)
+            if version_data_list:
+                return version_data_list
+            else:
+                print "... not found"
 
     def get_frame_range_from_shotgun(self):
         """
@@ -116,28 +123,23 @@ class SetFrameRange(Application):
         # if we're in Lighting or FX get the frame range from the latest published animation
         # TODO: will need to extend to other steps
         if data[sg_in_field] is None or data[sg_out_field] is None:
-            sg_filters = [['id', 'is', self.context.task['id']]]
-            sg_fields = ['step.Step.code']
-            step_data = self.shotgun.find_one('Task', filters=sg_filters, fields=sg_fields)
-            if not step_data.get('step.Step.code') == "Light" and not step_data.get('step.Step.code') == "FX":
+            if not self.context.step.get('name') == "Light" and not self.context.step.get('name') == "FX":
                 return ( data[sg_in_field], data[sg_out_field] )
             else:
                 start_frame = None
                 end_frame = None
-                sg_filters = [['entity', 'is', self.context.entity],
-                              ['task.Task.step.Step.code', 'is', 'Animation'],
-                              ['published_file_type', 'is', {'type': 'PublishedFileType', 'id': 4, 'name': 'Rendered Image'}]]
-                sg_fields = ['version_number', 'version.Version.sg_first_frame', 'version.Version.sg_last_frame', 'version.Version.frame_range']
-                version_data_list = self.shotgun.find('PublishedFile', filters=sg_filters, fields=sg_fields)
+                version_data_list = self.get_versions_list_from_shotgun()
                 if version_data_list:
                     latest_count = -1
                     for version_data in version_data_list:
+                        # background plates only
+                        if version_data.get('task.Task.step.Step.code') == 'plates' and 'bg' not in version_data.get('name'):
+                            pass
                         if version_data.get('version_number') > latest_count:
                             latest_count = version_data.get('version_number')
                             start_frame = version_data.get('version.Version.sg_first_frame')
                             end_frame = version_data.get('version.Version.sg_last_frame')
                 return ( start_frame, end_frame )
-
 
     def get_current_frame_range(self, engine):
 
@@ -174,6 +176,7 @@ class SetFrameRange(Application):
             from Py3dsMax import mxs
             current_in = mxs.animationRange.start
             current_out = mxs.animationRange.end
+
         elif engine == "tk-3dsmaxplus":
             import MaxPlus
             ticks = MaxPlus.Core.EvalMAXScript("ticksperframe").GetInt()
@@ -189,21 +192,18 @@ class SetFrameRange(Application):
 
         if engine == "tk-maya":
             import pymel.core as pm
-            
             # set frame ranges for plackback
-            pm.playbackOptions(minTime=in_frame, 
+            pm.playbackOptions(minTime=in_frame,
                                maxTime=out_frame,
                                animationStartTime=in_frame,
                                animationEndTime=out_frame)
-            
             # set frame ranges for rendering
             defaultRenderGlobals=pm.PyNode('defaultRenderGlobals')
             defaultRenderGlobals.startFrame.set(in_frame)
             defaultRenderGlobals.endFrame.set(out_frame)
-           
+
         elif engine == "tk-nuke" and not self.engine.hiero_enabled:
             import nuke
-
             # unlock
             locked = nuke.root()["lock_range"].value()
             if locked:
@@ -217,7 +217,6 @@ class SetFrameRange(Application):
 
         elif engine == "tk-motionbuilder":
             from pyfbsdk import FBPlayerControl, FBTime
-
             lPlayer = FBPlayerControl()
             lPlayer.LoopStart = FBTime(0, 0, 0, in_frame)
             lPlayer.LoopStop = FBTime(0, 0, 0, out_frame)
@@ -225,32 +224,30 @@ class SetFrameRange(Application):
         elif engine == "tk-softimage":
             import win32com
             Application = win32com.client.Dispatch('XSI.Application')
-            
             # set playback control
             Application.SetValue("PlayControl.In", in_frame)
             Application.SetValue("PlayControl.Out", out_frame)
             Application.SetValue("PlayControl.GlobalIn", in_frame)
-            Application.SetValue("PlayControl.GlobalOut", out_frame)       
-            
+            Application.SetValue("PlayControl.GlobalOut", out_frame)
             # set frame ranges for rendering
             Application.SetValue("Passes.RenderOptions.FrameStart", in_frame)
             Application.SetValue("Passes.RenderOptions.FrameEnd", out_frame)
-            
 
         elif engine == "tk-houdini":
             import hou
             # We have to use hscript until SideFX gets around to implementing hou.setGlobalFrameRange()
-            hou.hscript("tset `((%s-1)/$FPS)` `(%s/$FPS)`" % (in_frame, out_frame))            
+            hou.hscript("tset `((%s-1)/$FPS)` `(%s/$FPS)`" % (in_frame, out_frame))
             hou.playbar.setPlaybackRange(in_frame, out_frame)
 
         elif engine == "tk-3dsmax":
             from Py3dsMax import mxs
             mxs.animationRange = mxs.interval(in_frame, out_frame)
+
         elif engine == "tk-3dsmaxplus":
-            import MaxPlus 
+            import MaxPlus
             ticks = MaxPlus.Core.EvalMAXScript("ticksperframe").GetInt()
             range = MaxPlus.Interval(in_frame * ticks, out_frame * ticks)
             MaxPlus.Animation.SetRange(range)
-        
+
         else:
             raise tank.TankError("Don't know how to set current frame range for engine %s!" % engine)
