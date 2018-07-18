@@ -53,11 +53,11 @@ class SetFrameRange(Application):
         """
         Callback from when the menu is clicked.
         """
-        (new_in, new_out) = self.get_frame_range_from_shotgun()
+        (new_in, new_out, origin) = self.get_frame_range_from_shotgun()
         (current_in, current_out) = self.get_current_frame_range(self.engine.name)
 
         if new_in is None or new_out is None:
-            message =  "Shotgun has not yet been populated with \n"
+            message = "Shotgun has not yet been populated with \n"
             message += "in and out frame data for this Shot."
             QtGui.QMessageBox.information(None, "No data in Shotgun!", message)
             return
@@ -68,8 +68,8 @@ class SetFrameRange(Application):
         # the values in Shotgun are the same as the values reported via get_current_frame_range()
         self.set_frame_range(self.engine.name, new_in, new_out)
 
-        message =  "Your scene has been updated with the \n"
-        message += "latest frame ranges from shotgun.\n\n"
+        message = "Your scene has been updated with the \n"
+        message += "latest frame ranges from %s.\n\n" % origin
         message += "Previous start frame: %s\n" % current_in
         message += "New start frame: %s\n\n" % new_in
         message += "Previous end frame: %s\n" % current_out
@@ -120,26 +120,24 @@ class SetFrameRange(Application):
                                  "%s. This entity type does not have a "
                                  "field %s.%s!" % (sg_entity_type, sg_entity_type, sg_out_field))
 
-        # if we're in Lighting or FX get the frame range from the latest published animation
-        # TODO: will need to extend to other steps
+        # if either the in field or out field is None, check frame range of plates and if no plates, animation
         if data[sg_in_field] is None or data[sg_out_field] is None:
-            if not self.context.step.get('name') == "Light" and not self.context.step.get('name') == "FX":
-                return ( data[sg_in_field], data[sg_out_field] )
-            else:
-                start_frame = None
-                end_frame = None
-                version_data_list = self.get_versions_list_from_shotgun()
-                if version_data_list:
-                    latest_count = -1
-                    for version_data in version_data_list:
-                        # background plates only
-                        if version_data.get('task.Task.step.Step.code') == 'plates' and 'bg' not in version_data.get('name'):
-                            pass
-                        if version_data.get('version_number') > latest_count:
-                            latest_count = version_data.get('version_number')
-                            start_frame = version_data.get('version.Version.sg_first_frame')
-                            end_frame = version_data.get('version.Version.sg_last_frame')
-                return ( start_frame, end_frame )
+            start_frame = None
+            end_frame = None
+            version_data_list = self.get_versions_list_from_shotgun()
+            if version_data_list:
+                latest_count = -1
+                for version_data in version_data_list:
+                    # background plates only
+                    if version_data.get('task.Task.step.Step.code') == 'plates' and 'bg' not in version_data.get('name'):
+                        pass
+                    if version_data.get('version_number') > latest_count:
+                        latest_count = version_data.get('version_number')
+                        start_frame = version_data.get('version.Version.sg_first_frame')
+                        end_frame = version_data.get('version.Version.sg_last_frame')
+            return (start_frame, end_frame, version_data.get('task.Task.step.Step.code'))
+        else:
+            return (data[sg_in_field], data[sg_out_field], "shotgun data")
 
     def get_current_frame_range(self, engine):
 
@@ -198,7 +196,7 @@ class SetFrameRange(Application):
                                animationStartTime=in_frame,
                                animationEndTime=out_frame)
             # set frame ranges for rendering
-            defaultRenderGlobals=pm.PyNode('defaultRenderGlobals')
+            defaultRenderGlobals = pm.PyNode('defaultRenderGlobals')
             defaultRenderGlobals.startFrame.set(in_frame)
             defaultRenderGlobals.endFrame.set(out_frame)
 
